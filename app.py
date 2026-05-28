@@ -15,20 +15,91 @@ def processar_orcamentos(arquivo_fornecedor, arquivo_interno, nome_fornecedor):
     
     if arquivo_fornecedor is None or arquivo_interno is None:
         return " Por favor, envie os dois arquivos antes de analisar.", []
-    
+
+    import tempfile
+    import traceback
+
+    def _ensure_path(uploaded):
+        """Retorna um filesystem path válido para o arquivo enviado pelo Gradio."""
+        if uploaded is None:
+            return None
+
+        # Se for uma string path existente
+        if isinstance(uploaded, str) and os.path.exists(uploaded):
+            return uploaded
+
+        # Se o objeto tem atributo .name com caminho
+        path = getattr(uploaded, 'name', None)
+        if path and os.path.exists(path):
+            return path
+
+        # alguns objetos Gradio usam `tmp_path` ou `path`
+        candidate_paths = []
+        if isinstance(uploaded, dict):
+            candidate_paths += [uploaded.get('tmp_path'), uploaded.get('path'), uploaded.get('name')]
+        candidate_paths += [getattr(uploaded, 'tmp_path', None), getattr(uploaded, 'path', None)]
+
+        for candidate in candidate_paths:
+            if isinstance(candidate, str) and os.path.exists(candidate):
+                return candidate
+
+        # Se for um file-like, leia e salve em arquivo temporário
+        try:
+            data = None
+            if hasattr(uploaded, 'read'):
+                uploaded.seek(0)
+                data = uploaded.read()
+            elif isinstance(uploaded, dict) and 'data' in uploaded:
+                data = uploaded['data']
+
+            if data is not None:
+                suffix = ''
+                nameattr = None
+                if hasattr(uploaded, 'name'):
+                    nameattr = getattr(uploaded, 'name')
+                elif isinstance(uploaded, dict):
+                    nameattr = uploaded.get('name')
+                elif hasattr(uploaded, 'filename'):
+                    nameattr = getattr(uploaded, 'filename')
+
+                if nameattr:
+                    suffix = os.path.splitext(str(nameattr))[1]
+
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                if isinstance(data, str):
+                    data = data.encode()
+                tmp.write(data)
+                tmp.close()
+                return tmp.name
+        except Exception:
+            print("Erro ao criar arquivo temporario para upload:")
+            traceback.print_exc()
+
+        return None
+
     try:
+        caminho_forn = _ensure_path(arquivo_fornecedor)
+        caminho_int = _ensure_path(arquivo_interno)
+
+        if not caminho_forn or not caminho_int:
+            return " Erro ao processar arquivos: não foi possível ler os arquivos enviados.", []
+
+        print(f"DEBUG: caminho_forn={caminho_forn} caminho_int={caminho_int}")
+
         payload = montar_payload(
-            caminho_fornecedor=arquivo_fornecedor.name,
-            caminho_interno=arquivo_interno.name,
+            caminho_fornecedor=caminho_forn,
+            caminho_interno=caminho_int,
             nome_fornecedor=nome_fornecedor or "Fornecedor"
         )
-        
+
         resultado, historico_global = analisar(payload)
-        
+
         # Retorna análise + limpa o chat
         return resultado, []
-    
+
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return f" Erro ao processar arquivos:\n\n{str(e)}", []
 
 
